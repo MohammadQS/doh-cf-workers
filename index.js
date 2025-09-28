@@ -1,56 +1,67 @@
 // SPDX-License-Identifier: 0BSD
 
-const doh = 'https://security.cloudflare-dns.com/dns-query'
-const dohjson = 'https://security.cloudflare-dns.com/dns-query'
-const contype = 'application/dns-message'
-const jstontype = 'application/dns-json'
-const path = ''; // default allow all, must start with '/' if specified, eg. "/dns-query"
-const r404 = new Response(null, {status: 404});
+const DOH_BIN = 'https://security.cloudflare-dns.com/dns-query';
+const DOH_JSON = 'https://security.cloudflare-dns.com/dns-query';
+const TYPE_BIN = 'application/dns-message';
+const TYPE_JSON = 'application/dns-json';
 
-// developers.cloudflare.com/workers/runtime-apis/fetch-event/#syntax-module-worker
 export default {
-    async fetch(r, env, ctx) {
-        return handleRequest(r);
-    },
+  async fetch(request, env, ctx) {
+    return handleRequest(request);
+  },
 };
 
 async function handleRequest(request) {
-    // when res is a Promise<Response>, it reduces billed wall-time
-    // blog.cloudflare.com/workers-optimization-reduces-your-bill
-    let res = r404;
-    const { method, headers, url } = request
-    const {searchParams, pathname} = new URL(url)
-    
-    //Check path
-    if (!pathname.startsWith(path)) {
-        return r404;
-    }
-    if (method == 'GET' && searchParams.has('dns')) {
-        res = fetch(doh + '?dns=' + searchParams.get('dns'), {
-            method: 'GET',
-            headers: {
-                'Accept': contype,
-            }
-        });
-    } else if (method === 'POST' && headers.get('content-type') === contype) {
-        // streaming out the request body is optimal than awaiting on it
-        const rostream = request.body;
-        res = fetch(doh, {
-            method: 'POST',
-            headers: {
-                'Accept': contype,
-                'Content-Type': contype,
-            },
-            body: rostream,
-        });
-    } else if (method === 'GET' && headers.get('Accept') === jstontype) {
-        const search = new URL(url).search
-         res = fetch(dohjson + search, {
-            method: 'GET',
-            headers: {
-                'Accept': jstontype,
-            }
-        });
-    }
-    return res;
+  const { method, headers, url } = request;
+  const { pathname, searchParams } = new URL(url);
+
+  // Default 404
+  let res = new Response('Not Found', { status: 404 });
+
+  // ------------------------------
+  // 1. Binary DoH GET (?dns=...)
+  // ------------------------------
+  if (method === 'GET' && searchParams.has('dns')) {
+    res = fetch(`${DOH_BIN}?dns=${searchParams.get('dns')}`, {
+      method: 'GET',
+      headers: { 'Accept': TYPE_BIN },
+    });
+  }
+
+  // ------------------------------
+  // 2. Binary DoH POST (application/dns-message)
+  // ------------------------------
+  else if (method === 'POST' && headers.get('content-type') === TYPE_BIN) {
+    res = fetch(DOH_BIN, {
+      method: 'POST',
+      headers: {
+        'Accept': TYPE_BIN,
+        'Content-Type': TYPE_BIN,
+      },
+      body: request.body, // stream directly
+    });
+  }
+
+  // ------------------------------
+  // 3. JSON DoH GET (?name=...&type=...) with Accept: application/dns-json
+  // ------------------------------
+  else if (method === 'GET' && headers.get('accept')?.includes(TYPE_JSON) && searchParams.has('name')) {
+    res = fetch(`${DOH_JSON}?${searchParams.toString()}`, {
+      method: 'GET',
+      headers: { 'Accept': TYPE_JSON },
+    });
+  }
+
+  // ------------------------------
+  // 4. Google-style /resolve?name=...&type=...
+  // ------------------------------
+  else if (method === 'GET' && pathname.startsWith('/resolve') && searchParams.has('name')) {
+    res = fetch(`${DOH_JSON}?${searchParams.toString()}`, {
+      method: 'GET',
+      headers: { 'Accept': TYPE_JSON },
+    });
+  }
+
+  return res;
 }
+
